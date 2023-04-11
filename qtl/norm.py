@@ -54,13 +54,55 @@ def normalize_quantiles(df):
     return pd.DataFrame(M, index=df.index, columns=df.columns)
 
 
-def inverse_normal_transform(M):
+def _new_ranks(shared_rank, number_items_sharing_rank):
+    """Given a shared rank (calculate using rankdata w/ method 'average') and the number of items sharing that rank, determine the new ranks they may take when breaking the ties
+    Examples:
+    _new_ranks(2.5, 2) --> [2, 3]
+    _new_ranks(2.5, 4) --> [1, 2, 3, 4]
+    _new_ranks(3, 3) --> [2, 3, 4]
+    """
+    if number_items_sharing_rank % 2 == 1:
+        start = int(shared_rank - (number_items_sharing_rank - 1) / 2)
+    else:
+        start = int(shared_rank - 0.5) - int((number_items_sharing_rank - 2) / 2)
+    return list(range(start, start + number_items_sharing_rank))
+
+
+def break_ties(ranks):
+    """Given an array of ranks, randomly break any ties"""
+    ranks = ranks.copy()
+    # identify all ties:
+    vc = pd.Series(ranks).value_counts()
+    if int(vc.max()) == 1:
+        return ranks
+    else:
+        ties = vc[vc>1]
+        for value, count in ties.iteritems():
+            nr = _new_ranks(value, int(count))
+            # randomize the order in place
+            np.random.shuffle(nr)
+            ranks[ranks==value] = nr
+        assert(pd.Series(ranks).value_counts().max() == 1)
+        return ranks
+
+
+def inverse_normal_transform(M, method='average'):
     """Transform rows to a standard normal distribution"""
+    if method not in ['average', 'min', 'max', 'dense', 'ordinal', 'random']:
+        raise ValueError("method must be one of ['average', 'min', 'max', 'dense', 'ordinal', 'random']")
     if isinstance(M, pd.Series):
-        r = stats.rankdata(M)
+        if method == 'random':
+            r = stats.rankdata(M, method='average')
+            r = break_ties(r)
+        else:
+            r = stats.rankdata(M, method=method)
         return pd.Series(stats.norm.ppf(r/(M.shape[0]+1)), index=M.index, name=M.name)
     else:
-        R = stats.rankdata(M, axis=1)  # ties are averaged
+        if method == 'random':
+            R = stats.rankdata(M, axis=1, method='average')
+            R = np.apply_along_axis(break_ties, axis=1, arr=R)
+        else:
+            R = stats.rankdata(M, axis=1, method=method)
         Q = stats.norm.ppf(R/(M.shape[1]+1))
         if isinstance(M, pd.DataFrame):
             Q = pd.DataFrame(Q, index=M.index, columns=M.columns)
